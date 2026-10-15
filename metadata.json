@@ -1,0 +1,6 @@
+{
+  "name": "POS Al-Qassam Analyst",
+  "description": "Sistem Kasir & Analitik Penjualan Multi-Device Toko Al-Qassam, Manajemen Stok & Stok Min, serta Panduan Create Table Supabase",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kebijakan Privasi - POS Al-Qassam Analyst</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #f59e0b;
+      --accent-light: #fbbf24;
+      --emerald: #10b981;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 24px 16px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 24px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .logo-badge {
+      width: 52px;
+      height: 52px;
+      background: linear-gradient(135deg, #d97706, #f59e0b);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      color: #fff;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 800;
+      color: #ffffff;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--accent-light);
+      padding: 2px 8px;
+      border-radius: 6px;
+      margin-top: 4px;
+    }
+    .update-date {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+    h2 {
+      font-size: 17px;
+      color: var(--accent-light);
+      margin-top: 24px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    p, li {
+      font-size: 14px;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+    ul {
+      margin-left: 20px;
+      margin-bottom: 16px;
+    }
+    li {
+      margin-bottom: 8px;
+    }
+    .box {
+      background: rgba(17, 24, 39, 0.8);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      padding: 14px 16px;
+      border-radius: 8px;
+      margin: 16px 0;
+    }
+    .box-green {
+      border-left-color: var(--emerald);
+      background: rgba(16, 185, 129, 0.05);
+    }
+    .contact-card {
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 18px;
+      border-radius: 12px;
+      margin-top: 24px;
+    }
+    .contact-card b {
+      color: var(--accent-light);
+    }
+    .btn-back {
+      display: inline-block;
+      margin-top: 24px;
+      padding: 10px 20px;
+      background: #f59e0b;
+      color: #090d16;
+      font-weight: 700;
+      text-decoration: none;
+      border-radius: 10px;
+      font-size: 13px;
+      transition: opacity 0.2s;
+    }
+    .btn-back:hover {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-badge">💎</div>
+      <div>
+        <h1>Kebijakan Privasi POS Al-Qassam Analyst</h1>
+        <div class="badge">Google Play Store &amp; Android AAB Compliance</div>
+        <div class="update-date">Terakhir diperbarui: 15 Oktober 2026</div>
+      </div>
+    </div>
+
+    <p>
+      Selamat datang di <b>POS Al-Qassam Analyst</b>. Kami berkomitmen untuk menghormati dan melindungi privasi serta keamanan data operasional toko, data produk, dan informasi kasir Anda. Dokumen Kebijakan Privasi ini menjelaskan bagaimana data diproses saat Anda menggunakan aplikasi kami di berbagai perangkat (Komputer Kasir PC, Tablet, dan Smartphone Android).
+    </p>
+
+    <div class="box box-green">
+      <b>Prinsip Utama Privasi Kami:</b>
+      <p style="margin-top: 6px; margin-bottom: 0;">
+        POS Al-Qassam Analyst <b>TIDAK MENJUAL</b>, tidak menyewakan, dan tidak membagikan data transaksi bisnis, data stok, maupun informasi keuangan Anda kepada pihak ketiga pengiklan manapun. Seluruh basis data disimpan pada browser lokal perangkat Anda atau pada infrastruktur database Supabase privat yang Anda konfigurasi sendiri.
+      </p>
+    </div>
+
+    <h2>1. Informasi dan Data yang Diproses</h2>
+    <p>Aplikasi ini memproses data operasional toko yang Anda masukkan secara mandiri, meliputi:</p>
+    <ul>
+      <li><b>Data Produk &amp; Inventaris:</b> Nama produk, SKU, kode barcode, kategori, jumlah stok, stok minimum (alert), harga modal (beli), harga eceran, dan harga grosir.</li>
+      <li><b>Data Transaksi Penjualan:</b> Waktu transaksi, nama kasir bertugas, identitas perangkat (PC 1, PC 2, Tablet 3, atau HP Android), daftar item belanja, total pembayaran, dan rincian laba kotor.</li>
+      <li><b>Data Restock &amp; Pemasok:</b> Kontak supplier, riwayat pembelian barang masuk, dan nilai modal awal tahunan.</li>
+      <li><b>Data Akun Pengguna:</b> Nama staf, username, dan daftar hak akses menu yang telah disetujui oleh Administrator toko.</li>
+    </ul>
+
+    <h2>2. Penggunaan Izin Perangkat Android (Permissions)</h2>
+    <p>Aplikasi POS Al-Qassam Analyst membutuhkan izin berikut untuk menjalankan fungsinya secara optimal pada sistem operasi Android:</p>
+    <ul>
+      <li>
+        <b>Izin Kamera (<code>android.permission.CAMERA</code>):</b><br>
+        Hanya digunakan saat fitur <i>Barcode Scanner</i> aktif untuk mendeteksi dan membaca kode batang (barcode) pada kemasan produk secara cepat melalui kamera perangkat. Aplikasi <b>tidak pernah</b> merekam video, mengambil foto pribadi pengguna, atau mengunggah rekaman kamera ke server luar.
+      </li>
+      <li>
+        <b>Izin Internet &amp; Jaringan (<code>android.permission.INTERNET</code> &amp; <code>ACCESS_NETWORK_STATE</code>):</b><br>
+        Digunakan semata-mata untuk menghubungkan sistem kasir ke server database cloud Supabase milik Anda agar sinkronisasi multi-device berjalan secara realtime di antara PC kasir, tablet, dan ponsel.
+      </li>
+      <li>
+        <b>Penyimpanan Lokal (Local Storage / Cache):</b><br>
+        Menyimpan pengaturan printer thermal, preferensi tampilan, dan cadangan transaksi secara offline agar kasir tetap dapat beroperasi meski koneksi internet terputus sementara.
+      </li>
+    </ul>
+
+    <h2>3. Arsitektur Multi-Device &amp; Keamanan Data</h2>
+    <p>
+      Sistem POS Al-Qassam Analyst dirancang dengan standar keamanan tinggi:
+    </p>
+    <ul>
+      <li><b>Transmisi Terenkripsi:</b> Semua komunikasi data antara perangkat Android dan database cloud Supabase menggunakan protokol HTTPS dan WSS (WebSockets Secure) dengan enkripsi TLS 1.3.</li>
+      <li><b>Row Level Security (RLS):</b> Akses basis data PostgreSQL dilindungi kebijakan Row Level Security untuk mencegah akses tidak sah dari pihak luar.</li>
+      <li><b>Identifikasi Perangkat:</b> Setiap komputer kasir, tablet, dan smartphone memiliki tanda pengenal unik lokal (Device Tag) sehingga setiap nota penjualan dapat diaudit dengan jelas siapa kasirnya dan dari perangkat mana transaksi tersebut dibuat.</li>
+    </ul>
+
+    <h2>4. Hak Kontrol dan Penghapusan Data Pengguna</h2>
+    <p>
+      Sebagai pemilik toko (Administrator), Anda memiliki kendali penuh 100% atas data Anda:
+    </p>
+    <ul>
+      <li>Anda dapat mengekspor seluruh basis data ke dalam file Excel (.xlsx) kapan saja melalui menu <b>Import / Export Excel</b>.</li>
+      <li>Anda berhak menghapus atau mereset seluruh data toko secara permanen melalui tombol reset database yang dilindungi kata sandi di dalam aplikasi.</li>
+      <li>Jika aplikasi dicopot pemasangannya (uninstall) dari smartphone Android Anda, data lokal yang tersimpan di memori perangkat akan otomatis terhapus oleh sistem Android.</li>
+    </ul>
+
+    <h2>5. Kepatuhan Anak (COPPA / GDPR)</h2>
+    <p>
+      Aplikasi ini ditujukan untuk kebutuhan bisnis, kasir, dan manajemen toko retail/grosir, dan tidak ditujukan untuk anak-anak di bawah usia 13 tahun. Kami tidak secara sengaja mengumpulkan informasi dari anak-anak.
+    </p>
+
+    <h2>6. Perubahan Kebijakan Privasi</h2>
+    <p>
+      Kami dapat memperbarui Kebijakan Privasi ini dari waktu ke waktu untuk menyesuaikan dengan fitur baru atau regulasi Google Play Store. Perubahan akan selalu diperbarui pada halaman ini dengan tanggal revisi terbaru.
+    </p>
+
+    <div class="contact-card">
+      <h2>Hubungi Kami &amp; Layanan Bantuan</h2>
+      <p>
+        Jika Anda memiliki pertanyaan, saran, atau permintaan terkait pengelolaan data dan privasi pada aplikasi <b>POS Al-Qassam Analyst</b>, silakan hubungi kami melalui:
+      </p>
+      <p>
+        Email Pengembang: <b>firdauss34m4n@gmail.com</b><br>
+        Aplikasi: <b>POS Al-Qassam Analyst (Sistem Kasir &amp; Multi-Device Toko)</b>
+      </p>
+    </div>
+
+    <div style="text-align: center; margin-top: 20px;">
+      <a href="/" class="btn-back">&larr; Kembali ke Aplikasi POS</a>
+    </div>
+  </div>
+</body>
+</html>
