@@ -5,6 +5,7 @@
 [build.environment]
   NODE_VERSION = "22"
   NPM_FLAGS = "--legacy-peer-deps --no-audit"
+  CI = "false"
   NETLIFY_USE_YARN = "false"
 
 [[redirects]]
