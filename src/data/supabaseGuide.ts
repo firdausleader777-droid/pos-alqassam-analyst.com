@@ -101,14 +101,16 @@ CREATE TABLE IF NOT EXISTS public.purchase_items (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Tabel: app_users (Pengguna Aplikasi)
+-- Tabel: app_users (Pengguna Aplikasi & Hak Akses Kasir)
 CREATE TABLE IF NOT EXISTS public.app_users (
     username VARCHAR(100) PRIMARY KEY,
     password TEXT NOT NULL,
     name VARCHAR(150) NOT NULL,
     role VARCHAR(20) NOT NULL DEFAULT 'kasir',
+    permissions TEXT, -- JSON Array ID menu yang diizinkan untuk kasir
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS permissions TEXT;
 
 -- Tabel: opening_balances (Saldo Kas Awal Tahunan)
 CREATE TABLE IF NOT EXISTS public.opening_balances (
@@ -117,12 +119,13 @@ CREATE TABLE IF NOT EXISTS public.opening_balances (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Tabel: store_settings (Pengaturan Toko & Printer)
+-- Tabel: store_settings (Pengaturan Toko, Logo, Alamat & Printer)
 CREATE TABLE IF NOT EXISTS public.store_settings (
     id VARCHAR(50) PRIMARY KEY DEFAULT 'main',
     store_name VARCHAR(255) DEFAULT 'POS Al-Qassam Analyst',
     app_logo TEXT,
     store_logo TEXT,
+    hide_database_menu BOOLEAN DEFAULT false,
     printer_paper_width VARCHAR(10) DEFAULT '58mm',
     printer_address TEXT,
     printer_phone VARCHAR(50),
@@ -130,6 +133,11 @@ CREATE TABLE IF NOT EXISTS public.store_settings (
     printer_show_logo BOOLEAN DEFAULT true,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE public.store_settings ADD COLUMN IF NOT EXISTS hide_database_menu BOOLEAN DEFAULT false;
+ALTER TABLE public.store_settings ADD COLUMN IF NOT EXISTS printer_address TEXT;
+ALTER TABLE public.store_settings ADD COLUMN IF NOT EXISTS printer_phone VARCHAR(50);
+ALTER TABLE public.store_settings ADD COLUMN IF NOT EXISTS store_logo TEXT;
+ALTER TABLE public.store_settings ADD COLUMN IF NOT EXISTS app_logo TEXT;
 
 -- ------------------------------------------------------------------------------
 -- 3. ENABLE ROW LEVEL SECURITY (RLS) & POLICIES SECARA AMAN

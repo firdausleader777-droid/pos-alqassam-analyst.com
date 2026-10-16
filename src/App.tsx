@@ -27,7 +27,16 @@ import {
   pushTransactionToSupabase,
   pushStockDeductionsToSupabase,
   pushProductToSupabase,
-  fetchRemoteProducts
+  fetchRemoteProducts,
+  fetchRemoteTransactions,
+  fetchRemoteStoreSettings,
+  pushStoreSettingsToSupabase,
+  fetchRemoteUsers,
+  pushUserToSupabase,
+  deleteUserFromSupabase,
+  fetchRemoteSuppliers,
+  pushSupplierToSupabase,
+  parseQuickConnectHash
 } from './utils/supabaseSync';
 
 // Views & Components
@@ -171,6 +180,8 @@ export default function App() {
   const [scannerResult, setScannerResult] = useState<string | null>(null);
   const [currentReceipt, setCurrentReceipt] = useState<Transaction | null>(null);
 
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
   // Listen to Online/Offline
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -183,18 +194,105 @@ export default function App() {
     };
   }, []);
 
+  // Quick Connect Hash Listener (e.g. #connect=... opened on PC 1, 2, 3)
+  useEffect(() => {
+    const quick = parseQuickConnectHash();
+    if (quick) {
+      const updatedCfg: SupabaseConfig = {
+        url: quick.url,
+        anonKey: quick.anonKey,
+        connected: true
+      };
+      setSupabaseConfig(updatedCfg);
+      DB.set('supabaseConfig', updatedCfg);
+      // Clean hash from URL bar
+      window.history.replaceState(null, '', window.location.pathname);
+      setRealtimeNotification('✅ Berhasil terhubung ke database cloud toko via Tautan Cepat!');
+      setTimeout(() => setRealtimeNotification(null), 4000);
+    }
+  }, []);
+
+  // Full Cloud Sync function (runs on boot, on config save, or manual trigger)
+  const syncAllDataFromCloud = async (client: any) => {
+    try {
+      setCloudSyncStatus('connecting');
+      setCloudSyncMsg('Menyinkronkan data toko dari Cloud Supabase...');
+
+      // 1. Store Settings (Logo, Alamat, Format Struk)
+      const remoteSettings = await fetchRemoteStoreSettings(client);
+      if (remoteSettings) {
+        setBranding((prev) => {
+          const merged = { ...prev, ...remoteSettings.branding };
+          DB.set('branding', merged);
+          return merged;
+        });
+        if (remoteSettings.printerConfig) {
+          setPrinterConfig((prev) => {
+            const merged = { ...prev, ...remoteSettings.printerConfig };
+            DB.set('printerConfig', merged);
+            return merged;
+          });
+        }
+      }
+
+      // 2. Users (Akun Kasir, Password, Izin Akses)
+      const remoteUsers = await fetchRemoteUsers(client);
+      if (remoteUsers && remoteUsers.length > 0) {
+        setUsers((prev) => {
+          const mergedMap = new Map<string, User>();
+          prev.forEach((u) => mergedMap.set(u.username.toLowerCase(), u));
+          remoteUsers.forEach((u) => mergedMap.set(u.username.toLowerCase(), u));
+          const list = Array.from(mergedMap.values());
+          DB.set('users', list);
+          return list;
+        });
+      }
+
+      // 3. Products (Stok, Harga, Kategori)
+      const remoteProds = await fetchRemoteProducts(client);
+      if (remoteProds && remoteProds.length > 0) {
+        setProducts(remoteProds);
+        DB.set('products', remoteProds);
+      }
+
+      // 4. Transactions (Riwayat Penjualan Multi-Device)
+      const remoteTrxs = await fetchRemoteTransactions(client);
+      if (remoteTrxs && remoteTrxs.length > 0) {
+        setTransactions((prev) => {
+          const mergedMap = new Map<string, Transaction>();
+          prev.forEach((t) => mergedMap.set(t.id, t));
+          remoteTrxs.forEach((t) => mergedMap.set(t.id, t));
+          const list = Array.from(mergedMap.values()).sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+          DB.set('transactions', list);
+          return list;
+        });
+      }
+
+      // 5. Suppliers
+      const remoteSuppliers = await fetchRemoteSuppliers(client);
+      if (remoteSuppliers && remoteSuppliers.length > 0) {
+        setSuppliers(remoteSuppliers);
+        DB.set('suppliers', remoteSuppliers);
+      }
+
+      setCloudSyncStatus('connected');
+      setCloudSyncMsg('Terhubung ke Realtime Cloud (Multi-Device Aktif)');
+    } catch (err) {
+      console.warn('Gagal sinkronisasi data cloud:', err);
+      setCloudSyncStatus('error');
+      setCloudSyncMsg('Gagal menyinkronkan data cloud');
+    }
+  };
+
   // Realtime Supabase Multi-Device Synchronization
   useEffect(() => {
     if (supabaseConfig.url && supabaseConfig.anonKey) {
       const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
       if (client) {
-        // Initial fetch remote products to synchronize
-        fetchRemoteProducts(client).then((remoteProds) => {
-          if (remoteProds && remoteProds.length > 0) {
-            setProducts(remoteProds);
-            DB.set('products', remoteProds);
-          }
-        });
+        // Initial full data pull
+        syncAllDataFromCloud(client);
 
         const unsubscribe = subscribeStoreRealtime(client, currentDevice, {
           onProductUpdate: (updatedProd) => {
@@ -223,12 +321,67 @@ export default function App() {
           onTransactionInsert: (incomingTrx) => {
             setTransactions((prev) => {
               if (prev.some((t) => t.id === incomingTrx.id)) return prev;
-              const nextList = [...prev, incomingTrx];
+              const nextList = [incomingTrx, ...prev];
               DB.set('transactions', nextList);
               return nextList;
             });
             setRealtimeNotification(`🛒 Transaksi dari ${incomingTrx.deviceName || incomingTrx.cashier} (Rp ${incomingTrx.total.toLocaleString('id-ID')})`);
             setTimeout(() => setRealtimeNotification(null), 3500);
+          },
+          onStoreSettingsUpdate: (remoteBranding, remotePrinter) => {
+            setBranding((prev) => {
+              const merged = { ...prev, ...remoteBranding };
+              DB.set('branding', merged);
+              return merged;
+            });
+            setPrinterConfig((prev) => {
+              const merged = { ...prev, ...remotePrinter };
+              DB.set('printerConfig', merged);
+              return merged;
+            });
+            setRealtimeNotification('🏷️ Identitas toko & logo diperbarui dari perangkat lain');
+            setTimeout(() => setRealtimeNotification(null), 3500);
+          },
+          onUserUpdate: (incomingUser) => {
+            setUsers((prev) => {
+              const idx = prev.findIndex((u) => u.username.toLowerCase() === incomingUser.username.toLowerCase());
+              let nextList: User[];
+              if (idx >= 0) {
+                nextList = [...prev];
+                nextList[idx] = incomingUser;
+              } else {
+                nextList = [...prev, incomingUser];
+              }
+              DB.set('users', nextList);
+              return nextList;
+            });
+            if (currentUser?.username.toLowerCase() === incomingUser.username.toLowerCase()) {
+              setCurrentUser(incomingUser);
+              DB.set('session', incomingUser);
+            }
+            setRealtimeNotification(`👤 Akun pengguna ${incomingUser.name} disinkronkan`);
+            setTimeout(() => setRealtimeNotification(null), 3500);
+          },
+          onUserDelete: (delUsername) => {
+            setUsers((prev) => {
+              const nextList = prev.filter((u) => u.username.toLowerCase() !== delUsername.toLowerCase());
+              DB.set('users', nextList);
+              return nextList;
+            });
+          },
+          onSupplierUpdate: (incomingSupplier) => {
+            setSuppliers((prev) => {
+              const idx = prev.findIndex((s) => s.id === incomingSupplier.id);
+              let nextList: Supplier[];
+              if (idx >= 0) {
+                nextList = [...prev];
+                nextList[idx] = incomingSupplier;
+              } else {
+                nextList = [...prev, incomingSupplier];
+              }
+              DB.set('suppliers', nextList);
+              return nextList;
+            });
           },
           onStatusChange: (status, msg) => {
             setCloudSyncStatus(status);
@@ -246,7 +399,7 @@ export default function App() {
     }
   }, [supabaseConfig.url, supabaseConfig.anonKey, currentDevice.id]);
 
-  // Save to DB on change
+  // Save to DB on change & push to Supabase if connected
   const updateProducts = (newProds: Product[]) => {
     setProducts(newProds);
     DB.set('products', newProds);
@@ -275,11 +428,23 @@ export default function App() {
   const updateBranding = (newBranding: Branding) => {
     setBranding(newBranding);
     DB.set('branding', newBranding);
+    const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+    if (client && supabaseConfig.connected) {
+      pushStoreSettingsToSupabase(client, newBranding, printerConfig);
+      setRealtimeNotification('✅ Identitas toko & logo disinkronkan ke Cloud Supabase');
+      setTimeout(() => setRealtimeNotification(null), 3000);
+    }
   };
 
   const updatePrinter = (newCfg: PrinterConfig) => {
     setPrinterConfig(newCfg);
     DB.set('printerConfig', newCfg);
+    const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+    if (client && supabaseConfig.connected) {
+      pushStoreSettingsToSupabase(client, branding, newCfg);
+      setRealtimeNotification('✅ Pengaturan printer & alamat disinkronkan ke Cloud');
+      setTimeout(() => setRealtimeNotification(null), 3000);
+    }
   };
 
   const updateOpeningBalances = (year: string, amount: number) => {
@@ -288,22 +453,75 @@ export default function App() {
     DB.set('openingBalances', updated);
   };
 
-  // Auth Handlers
-  const handleLogin = (e: React.FormEvent) => {
+  // Auth Handlers with Online Fallback
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoggingIn(true);
+    setLoginError('');
+
+    const cleanUser = loginUsername.trim().toLowerCase();
     const found = users.find(
       (u) =>
-        u.username.toLowerCase() === loginUsername.trim().toLowerCase() &&
+        u.username.toLowerCase() === cleanUser &&
         u.password === loginPassword
     );
+
     if (found) {
       setCurrentUser(found);
       DB.set('session', found);
       setLoginError('');
       setCurrentPage('dashboard');
-    } else {
-      setLoginError('Username atau password salah.');
+      setIsLoggingIn(false);
+      return;
     }
+
+    // If not found in local cache, verify online from Supabase app_users table
+    if (supabaseConfig.url && supabaseConfig.anonKey) {
+      try {
+        const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+        if (client) {
+          const { data, error } = await client
+            .from('app_users')
+            .select('*')
+            .eq('username', cleanUser)
+            .single();
+
+          if (data && data.password === loginPassword) {
+            let permissions: string[] | undefined;
+            if (data.permissions) {
+              try {
+                permissions = typeof data.permissions === 'string' ? JSON.parse(data.permissions) : data.permissions;
+              } catch {
+                permissions = undefined;
+              }
+            }
+            const remoteUser: User = {
+              username: data.username,
+              password: data.password,
+              name: data.name || data.username,
+              role: data.role === 'admin' ? 'admin' : 'kasir',
+              permissions: permissions || (data.role === 'admin' ? ALL_MENU_IDS : CASHIER_DEFAULT_MENU_IDS)
+            };
+
+            const updatedUsers = [...users.filter((u) => u.username.toLowerCase() !== cleanUser), remoteUser];
+            setUsers(updatedUsers);
+            DB.set('users', updatedUsers);
+
+            setCurrentUser(remoteUser);
+            DB.set('session', remoteUser);
+            setLoginError('');
+            setCurrentPage('dashboard');
+            setIsLoggingIn(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Gagal verifikasi login online:', err);
+      }
+    }
+
+    setIsLoggingIn(false);
+    setLoginError('Username atau password salah.');
   };
 
   const handleLogout = () => {
@@ -436,6 +654,24 @@ export default function App() {
       setCurrentUser(u);
       DB.set('session', u);
     }
+
+    const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+    if (client && supabaseConfig.connected) {
+      pushUserToSupabase(client, u);
+      setRealtimeNotification(`✅ Akun pengguna ${u.name} disinkronkan ke Cloud`);
+      setTimeout(() => setRealtimeNotification(null), 3000);
+    }
+  };
+
+  const handleDeleteUser = (delUsername: string) => {
+    const updated = users.filter((u) => u.username.toLowerCase() !== delUsername.toLowerCase());
+    updateUsers(updated);
+    const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+    if (client && supabaseConfig.connected) {
+      deleteUserFromSupabase(client, delUsername);
+      setRealtimeNotification(`🗑️ Akun pengguna ${delUsername} dihapus dari Cloud`);
+      setTimeout(() => setRealtimeNotification(null), 3000);
+    }
   };
 
   // Low stock badge count for sidebar
@@ -448,13 +684,13 @@ export default function App() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-amber-950/40 flex items-center justify-center p-4">
         <div className="w-full max-w-sm rounded-3xl border border-amber-500/20 bg-slate-900/90 p-8 shadow-2xl backdrop-blur-md">
-          {/* Logo Mark */}
+          {/* Logo Mark & Store Branding */}
           <div className="flex flex-col items-center text-center mb-6">
             <div className="h-16 w-16 rounded-2xl bg-gradient-to-tr from-amber-600 to-amber-400 p-0.5 shadow-lg shadow-amber-500/20 flex items-center justify-center mb-3">
               {branding.appLogo ? (
                 <img
                   src={branding.appLogo}
-                  alt="Logo"
+                  alt="Logo Toko"
                   className="h-full w-full object-cover rounded-[14px]"
                 />
               ) : (
@@ -462,24 +698,41 @@ export default function App() {
               )}
             </div>
             <h1 className="text-xl font-black tracking-tight text-white">
-              POS <span className="text-amber-400">Al-Qassam</span> Analyst
+              {branding.storeName || 'POS Al-Qassam Analyst'}
             </h1>
             <p className="text-xs text-slate-400 mt-1 uppercase tracking-widest font-semibold">
-              Sistem Kasir &amp; Manajemen Stok
+              Sistem Kasir &amp; Multi-Device Toko
             </p>
+          </div>
+
+          {/* Cloud Connection Quick Badge on Login */}
+          <div className="mb-4 flex items-center justify-between p-2.5 rounded-xl border border-slate-800 bg-slate-950/70 text-xs">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${supabaseConfig.connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+              <span className="text-slate-300 font-medium text-[11px]">
+                {supabaseConfig.connected ? 'Cloud Terhubung' : 'Database: Mode Lokal'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsDeviceModalOpen(true)}
+              className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2"
+            >
+              {supabaseConfig.connected ? 'Atur Device' : 'Hubungkan Cloud'}
+            </button>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                Username
+                Username (Admin / Kasir)
               </label>
               <div className="relative">
                 <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
                 <input
                   type="text"
                   required
-                  placeholder="admin"
+                  placeholder="admin atau nama kasir"
                   value={loginUsername}
                   onChange={(e) => setLoginUsername(e.target.value)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 pl-10 pr-3 text-sm text-white focus:border-amber-400 focus:outline-none"
@@ -505,24 +758,45 @@ export default function App() {
             </div>
 
             {loginError && (
-              <div className="text-xs text-red-400 bg-red-950/30 p-2.5 rounded-lg border border-red-500/20 text-center">
+              <div className="text-xs text-red-400 bg-red-950/30 p-2.5 rounded-lg border border-red-500/20 text-center animate-fade-in">
                 {loginError}
               </div>
             )}
 
             <button
               type="submit"
-              className="w-full rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 hover:brightness-105 transition-all active:scale-98"
+              disabled={isLoggingIn}
+              className="w-full rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 hover:brightness-105 transition-all active:scale-98 disabled:opacity-60"
             >
-              Masuk ke Aplikasi
+              {isLoggingIn ? 'Memverifikasi Akun...' : 'Masuk ke Aplikasi'}
             </button>
           </form>
 
-          <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-center text-[11px] text-slate-400 leading-relaxed">
-            Akun default admin: <b className="text-amber-400 font-mono">admin</b> /{' '}
+          <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-center text-[11px] text-slate-400 leading-relaxed">
+            Akun admin default: <b className="text-amber-400 font-mono">admin</b> /{' '}
             <b className="text-amber-400 font-mono">admin123</b>
+            <div className="text-[10px] text-slate-500 mt-1">
+              Akun kasir baru otomatis aktif di semua PC setelah Cloud terhubung.
+            </div>
           </div>
         </div>
+
+        {/* Modal Multi-Device can be opened directly from Login screen */}
+        <MultiDeviceModal
+          isOpen={isDeviceModalOpen}
+          onClose={() => setIsDeviceModalOpen(false)}
+          currentDevice={currentDevice}
+          onSaveDevice={handleSaveDevice}
+          supabaseConfig={supabaseConfig}
+          onSaveSupabaseConfig={handleSaveSupabaseConfig}
+          onOpenSupabaseGuide={() => {
+            setIsDeviceModalOpen(false);
+          }}
+          onTriggerSync={async () => {
+            const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+            if (client) await syncAllDataFromCloud(client);
+          }}
+        />
       </div>
     );
   }
@@ -875,16 +1149,25 @@ export default function App() {
               suppliers={suppliers}
               onSaveProduct={(p) => {
                 const idx = products.findIndex((x) => x.id === p.id);
+                let updated: Product[];
                 if (idx >= 0) {
-                  const updated = [...products];
+                  updated = [...products];
                   updated[idx] = p;
-                  updateProducts(updated);
                 } else {
-                  updateProducts([...products, p]);
+                  updated = [...products, p];
+                }
+                updateProducts(updated);
+                const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+                if (client && supabaseConfig.connected) {
+                  pushProductToSupabase(client, p);
                 }
               }}
               onDeleteProduct={(id) => {
                 updateProducts(products.filter((p) => p.id !== id));
+                const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+                if (client && supabaseConfig.connected) {
+                  client.from('products').delete().eq('id', id);
+                }
               }}
               onOpenScanner={(target) => {
                 setScannerTarget(target);
@@ -903,6 +1186,11 @@ export default function App() {
               onSavePurchase={(newPu, newProds) => {
                 updatePurchases([...purchases, newPu]);
                 updateProducts(newProds);
+                const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+                if (client && supabaseConfig.connected) {
+                  const deductions = newProds.map((p) => ({ id: p.id, newStock: p.stock }));
+                  pushStockDeductionsToSupabase(client, deductions);
+                }
               }}
               onDeletePurchase={(id) => {
                 updatePurchases(purchases.filter((p) => p.id !== id));
@@ -931,16 +1219,25 @@ export default function App() {
               suppliers={suppliers}
               onSaveSupplier={(s) => {
                 const idx = suppliers.findIndex((x) => x.id === s.id);
+                let updated: Supplier[];
                 if (idx >= 0) {
-                  const updated = [...suppliers];
+                  updated = [...suppliers];
                   updated[idx] = s;
-                  updateSuppliers(updated);
                 } else {
-                  updateSuppliers([...suppliers, s]);
+                  updated = [...suppliers, s];
+                }
+                updateSuppliers(updated);
+                const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+                if (client && supabaseConfig.connected) {
+                  pushSupplierToSupabase(client, s);
                 }
               }}
               onDeleteSupplier={(id) => {
                 updateSuppliers(suppliers.filter((s) => s.id !== id));
+                const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+                if (client && supabaseConfig.connected) {
+                  client.from('suppliers').delete().eq('id', id);
+                }
               }}
             />
           )}
@@ -985,9 +1282,7 @@ export default function App() {
               users={users}
               currentUser={currentUser}
               onSaveUser={handleSaveUser}
-              onDeleteUser={(username) =>
-                updateUsers(users.filter((u) => u.username !== username))
-              }
+              onDeleteUser={handleDeleteUser}
             />
           )}
         </main>
@@ -1024,6 +1319,10 @@ export default function App() {
         supabaseConfig={supabaseConfig}
         onSaveSupabaseConfig={handleSaveSupabaseConfig}
         onOpenSupabaseGuide={() => setCurrentPage('cloud')}
+        onTriggerSync={async () => {
+          const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
+          if (client) await syncAllDataFromCloud(client);
+        }}
       />
 
       {/* -------------------------------------------------------------

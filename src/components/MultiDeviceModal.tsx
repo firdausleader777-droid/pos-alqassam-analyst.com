@@ -2,6 +2,11 @@ import { useState } from 'react';
 import { DeviceConfig, SupabaseConfig } from '../types';
 import { DEVICE_PRESETS } from '../data/defaultData';
 import {
+  getSupabaseClient,
+  testSupabaseConnection,
+  generateQuickConnectLink
+} from '../utils/supabaseSync';
+import {
   Monitor,
   Tablet,
   Smartphone,
@@ -13,7 +18,9 @@ import {
   ExternalLink,
   Layers,
   ArrowRight,
-  FileCode,
+  Copy,
+  Check,
+  Share2,
   FileText
 } from 'lucide-react';
 
@@ -25,6 +32,7 @@ interface MultiDeviceModalProps {
   supabaseConfig: SupabaseConfig;
   onSaveSupabaseConfig: (cfg: SupabaseConfig) => void;
   onOpenSupabaseGuide: () => void;
+  onTriggerSync?: () => Promise<void>;
 }
 
 export function MultiDeviceModal({
@@ -34,7 +42,8 @@ export function MultiDeviceModal({
   onSaveDevice,
   supabaseConfig,
   onSaveSupabaseConfig,
-  onOpenSupabaseGuide
+  onOpenSupabaseGuide,
+  onTriggerSync
 }: MultiDeviceModalProps) {
   const [selectedPresetId, setSelectedPresetId] = useState(currentDevice.id);
   const [customName, setCustomName] = useState(currentDevice.name);
@@ -45,12 +54,79 @@ export function MultiDeviceModal({
   const [anonKey, setAnonKey] = useState(supabaseConfig.anonKey || '');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
+  // Diagnostics state
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    message: string;
+    tables: { products: boolean; app_users: boolean; store_settings: boolean; transactions: boolean };
+  } | null>(null);
+
+  // Quick link copy feedback
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [isSyncingNow, setIsSyncingNow] = useState(false);
+
   if (!isOpen) return null;
 
   const handleSelectPreset = (preset: typeof DEVICE_PRESETS[0]) => {
     setSelectedPresetId(preset.id);
     setCustomName(preset.name);
     setDeviceType(preset.type);
+  };
+
+  const handleTestConnection = async () => {
+    const cleanUrl = url.trim();
+    const cleanKey = anonKey.trim();
+    if (!cleanUrl || !cleanKey) {
+      alert('Silakan isi URL dan Anon Key Supabase terlebih dahulu.');
+      return;
+    }
+    setIsTesting(true);
+    setTestResult(null);
+
+    const client = getSupabaseClient(cleanUrl, cleanKey);
+    if (!client) {
+      setIsTesting(false);
+      setTestResult({
+        ok: false,
+        message: 'Format URL atau Anon Key tidak valid.',
+        tables: { products: false, app_users: false, store_settings: false, transactions: false }
+      });
+      return;
+    }
+
+    const res = await testSupabaseConnection(client);
+    setIsTesting(false);
+    setTestResult(res);
+  };
+
+  const handleCopyQuickLink = () => {
+    const cleanUrl = url.trim();
+    const cleanKey = anonKey.trim();
+    if (!cleanUrl || !cleanKey) {
+      alert('Isi URL dan Anon Key terlebih dahulu untuk membuat tautan cepat.');
+      return;
+    }
+    const link = generateQuickConnectLink(cleanUrl, cleanKey);
+    navigator.clipboard.writeText(link).then(() => {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 3000);
+    }).catch(() => {
+      prompt('Salin tautan ini secara manual:', link);
+    });
+  };
+
+  const handleManualSyncNow = async () => {
+    if (onTriggerSync) {
+      setIsSyncingNow(true);
+      try {
+        await onTriggerSync();
+        setSaveSuccessMsg('Sinkronisasi cloud berhasil dijalankan!');
+        setTimeout(() => setSaveSuccessMsg(null), 3000);
+      } finally {
+        setIsSyncingNow(false);
+      }
+    }
   };
 
   const handleSaveAll = (e: React.FormEvent) => {
@@ -98,7 +174,7 @@ export function MultiDeviceModal({
                 Multi-Device &amp; Sinkronisasi Cloud Realtime
               </h3>
               <p className="text-xs text-slate-400">
-                Hubungkan PC 1, PC 2, Tablet 3, &amp; HP Android dalam 1 Database Toko
+                Hubungkan PC 1, PC 2, Tablet 3, &amp; HP Android dalam 1 Database Toko Bersama
               </p>
             </div>
           </div>
@@ -195,7 +271,7 @@ export function MultiDeviceModal({
                   2. Kredensial Database Cloud Supabase (Satu Database untuk Semua Device)
                 </div>
                 <div className="text-[11px] text-slate-400 mt-0.5">
-                  Masukkan URL dan Anon Key yang sama di setiap PC/Tablet/HP di toko Anda.
+                  Hubungkan database agar akun kasir, logo, alamat, produk &amp; stok tersinkron otomatis.
                 </div>
               </div>
               <button
@@ -237,40 +313,76 @@ export function MultiDeviceModal({
                 />
               </div>
             </div>
-          </div>
 
-          {/* Section 3: Android Studio AAB & Privacy Policy link */}
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 space-y-2 text-xs text-slate-300">
-            <div className="flex items-center justify-between">
-              <div className="font-bold text-emerald-300 flex items-center gap-1.5">
-                <FileText className="h-4 w-4 text-emerald-400" />
-                3. Dokumen Kebijakan Privasi (Google Play AAB Ready)
-              </div>
-              <a
-                href="/privacy.html"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 bg-emerald-500/15 px-2.5 py-1 rounded-lg border border-emerald-500/30 transition-colors"
+            {/* Diagnostics & Quick Actions */}
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={handleTestConnection}
+                disabled={isTesting || !url || !anonKey}
+                className="rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors"
               >
-                Buka /privacy.html <ExternalLink className="h-3 w-3" />
-              </a>
+                <RefreshCw className={`h-3.5 w-3.5 ${isTesting ? 'animate-spin text-amber-400' : ''}`} />
+                {isTesting ? 'Menguji...' : 'Uji Koneksi Database'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyQuickLink}
+                disabled={!url || !anonKey}
+                className="rounded-lg border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-300 inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors"
+              >
+                {copiedLink ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}
+                {copiedLink ? 'Tautan Tersalin!' : 'Salin Tautan Cepat untuk PC 1, 2, 3'}
+              </button>
+
+              {onTriggerSync && (
+                <button
+                  type="button"
+                  onClick={handleManualSyncNow}
+                  disabled={isSyncingNow || !url || !anonKey}
+                  className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-300 inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isSyncingNow ? 'animate-spin' : ''}`} />
+                  {isSyncingNow ? 'Menyinkronkan...' : 'Tarik & Sinkronkan Sekarang'}
+                </button>
+              )}
             </div>
-            <p className="text-[11px] text-slate-300 leading-relaxed">
-              Halaman <code className="text-emerald-300 font-mono">/privacy.html</code> telah siap digunakan sebagai URL Kebijakan Privasi resmi saat Anda membuat file format <b>AAB (Android App Bundle)</b> di Android Studio untuk dipublikasikan ke Google Play Console.
-            </p>
+
+            {/* Test Connection Results Card */}
+            {testResult && (
+              <div className={`p-3 rounded-xl border text-xs space-y-1.5 ${testResult.ok ? 'border-emerald-500/40 bg-emerald-950/20 text-emerald-300' : 'border-rose-500/40 bg-rose-950/20 text-rose-300'}`}>
+                <div className="font-bold flex items-center gap-1.5">
+                  {testResult.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <AlertCircle className="h-4 w-4 text-rose-400" />}
+                  {testResult.message}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[11px]">
+                  <span className={testResult.tables.products ? 'text-emerald-400' : 'text-rose-400'}>
+                    Produk: {testResult.tables.products ? '✓ Aktif' : '✗ Belum Ada'}
+                  </span>
+                  <span className={testResult.tables.app_users ? 'text-emerald-400' : 'text-rose-400'}>
+                    Akun Kasir: {testResult.tables.app_users ? '✓ Aktif' : '✗ Belum Ada'}
+                  </span>
+                  <span className={testResult.tables.store_settings ? 'text-emerald-400' : 'text-rose-400'}>
+                    Identitas Toko: {testResult.tables.store_settings ? '✓ Aktif' : '✗ Belum Ada'}
+                  </span>
+                  <span className={testResult.tables.transactions ? 'text-emerald-400' : 'text-rose-400'}>
+                    Transaksi: {testResult.tables.transactions ? '✓ Aktif' : '✗ Belum Ada'}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Section 4: 3-Step Store Setup Guide */}
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-2 text-xs">
-            <div className="font-bold text-amber-400 flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4" /> Cara Kerja Multi-Device dalam 1 Toko:
+          {/* Section 3: Cara Kerja Tautan Cepat Multi-Device */}
+          <div className="rounded-xl border border-amber-500/20 bg-amber-950/15 p-4 space-y-2 text-xs">
+            <div className="font-bold text-amber-300 flex items-center gap-1.5">
+              <Share2 className="h-4 w-4 text-amber-400" />
+              💡 Solusi Mudah Menghubungkan Komputer 1, 2, dan 3:
             </div>
-            <ol className="list-decimal list-inside space-y-1 text-slate-300 text-[11px] leading-relaxed">
-              <li><b>Perangkat 1 (PC Kasir Utama):</b> Masukkan URL &amp; Anon Key Supabase, pilih &quot;PC Kasir 1&quot;.</li>
-              <li><b>Perangkat 2 &amp; 3 (PC Kasir 2 / Tablet 3):</b> Buka link toko yang sama, masukkan kredensial Supabase yang sama, pilih &quot;PC Kasir 2&quot; atau &quot;Tablet 3&quot;.</li>
-              <li><b>Perangkat 4 (HP Android):</b> Buka di Chrome HP Android, pilih &quot;HP Android&quot;, tap &quot;Tambahkan ke Layar Utama&quot;.</li>
-              <li><b>Otomatis Realtime:</b> Ketika PC 1 menjual Serum (stok berkurang 1), layar di PC 2, Tablet 3, dan HP Android otomatis langsung terupdate tanpa perlu refresh!</li>
-            </ol>
+            <p className="text-slate-300 text-[11.5px] leading-relaxed">
+              Anda <b>tidak perlu mengetik URL dan Anon Key panjang</b> di setiap komputer. Cukup klik tombol <b>&quot;Salin Tautan Cepat untuk PC 1, 2, 3&quot;</b> di atas, lalu kirim via WhatsApp Web / email ke Komputer 1, 2, dan 3. Saat link dibuka di browser komputer, seluruh database, logo, alamat, dan akun kasir otomatis tersambung dalam 1 detik!
+            </p>
           </div>
 
           {saveSuccessMsg && (
@@ -286,13 +398,13 @@ export function MultiDeviceModal({
               onClick={onClose}
               className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-750 px-4 py-2 text-xs font-semibold text-slate-300 transition-colors"
             >
-              Batal
+              Tutup
             </button>
             <button
               type="submit"
               className="rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:brightness-105 px-5 py-2 text-xs font-bold text-slate-950 shadow-md transition-all active:scale-95"
             >
-              Simpan Identitas &amp; Aktifkan Sync
+              Simpan &amp; Aktifkan Sync
             </button>
           </div>
         </form>
