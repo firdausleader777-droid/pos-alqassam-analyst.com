@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { DeviceConfig, SupabaseConfig } from '../types';
+import { DeviceConfig, SupabaseConfig, Branding, PrinterConfig, User, Product, Supplier } from '../types';
 import { DEVICE_PRESETS } from '../data/defaultData';
 import {
   getSupabaseClient,
   testSupabaseConnection,
-  generateQuickConnectLink
+  generateQuickConnectLink,
+  generatePairingCode,
+  parseQuickConnectString,
+  uploadAllLocalDataToSupabase
 } from '../utils/supabaseSync';
 import {
   Monitor,
@@ -21,7 +24,10 @@ import {
   Copy,
   Check,
   Share2,
-  FileText
+  UploadCloud,
+  DownloadCloud,
+  KeyRound,
+  Sparkles
 } from 'lucide-react';
 
 interface MultiDeviceModalProps {
@@ -33,6 +39,13 @@ interface MultiDeviceModalProps {
   onSaveSupabaseConfig: (cfg: SupabaseConfig) => void;
   onOpenSupabaseGuide: () => void;
   onTriggerSync?: () => Promise<void>;
+  localStoreData?: {
+    branding: Branding;
+    printerConfig: PrinterConfig;
+    users: User[];
+    products: Product[];
+    suppliers: Supplier[];
+  };
 }
 
 export function MultiDeviceModal({
@@ -43,7 +56,8 @@ export function MultiDeviceModal({
   supabaseConfig,
   onSaveSupabaseConfig,
   onOpenSupabaseGuide,
-  onTriggerSync
+  onTriggerSync,
+  localStoreData
 }: MultiDeviceModalProps) {
   const [selectedPresetId, setSelectedPresetId] = useState(currentDevice.id);
   const [customName, setCustomName] = useState(currentDevice.name);
@@ -54,7 +68,11 @@ export function MultiDeviceModal({
   const [anonKey, setAnonKey] = useState(supabaseConfig.anonKey || '');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
-  // Diagnostics state
+  // Quick connect input on PC
+  const [pastedCodeOrLink, setPastedCodeOrLink] = useState('');
+  const [pastingError, setPastingError] = useState('');
+
+  // Diagnostics & Upload state
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
@@ -64,7 +82,10 @@ export function MultiDeviceModal({
 
   // Quick link copy feedback
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [isSyncingNow, setIsSyncingNow] = useState(false);
+  const [isUploadingAll, setIsUploadingAll] = useState(false);
+  const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -104,7 +125,7 @@ export function MultiDeviceModal({
     const cleanUrl = url.trim();
     const cleanKey = anonKey.trim();
     if (!cleanUrl || !cleanKey) {
-      alert('Isi URL dan Anon Key terlebih dahulu untuk membuat tautan cepat.');
+      alert('Isi URL dan Anon Key terlebih dahulu untuk membuat tautan.');
       return;
     }
     const link = generateQuickConnectLink(cleanUrl, cleanKey);
@@ -112,8 +133,78 @@ export function MultiDeviceModal({
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 3000);
     }).catch(() => {
-      prompt('Salin tautan ini secara manual:', link);
+      prompt('Salin tautan ini:', link);
     });
+  };
+
+  const handleCopyPairingCode = () => {
+    const cleanUrl = url.trim();
+    const cleanKey = anonKey.trim();
+    if (!cleanUrl || !cleanKey) {
+      alert('Isi URL dan Anon Key terlebih dahulu untuk membuat kode pairing.');
+      return;
+    }
+    const code = generatePairingCode(cleanUrl, cleanKey);
+    navigator.clipboard.writeText(code).then(() => {
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 3000);
+    }).catch(() => {
+      prompt('Salin kode pairing ini:', code);
+    });
+  };
+
+  const handleApplyPastedCode = () => {
+    setPastingError('');
+    const parsed = parseQuickConnectString(pastedCodeOrLink);
+    if (parsed && parsed.url && parsed.anonKey) {
+      setUrl(parsed.url);
+      setAnonKey(parsed.anonKey);
+      const updatedCfg: SupabaseConfig = {
+        ...supabaseConfig,
+        url: parsed.url,
+        anonKey: parsed.anonKey,
+        connected: true
+      };
+      onSaveSupabaseConfig(updatedCfg);
+      setSaveSuccessMsg('Kode pairing berhasil diterapkan! Mengunduh data toko...');
+      setPastedCodeOrLink('');
+      if (onTriggerSync) {
+        onTriggerSync();
+      }
+      setTimeout(() => setSaveSuccessMsg(null), 3500);
+    } else {
+      setPastingError('Teks yang ditempel bukan kode pairing atau tautan Supabase yang valid.');
+    }
+  };
+
+  const handleUploadAllToCloud = async () => {
+    const cleanUrl = url.trim();
+    const cleanKey = anonKey.trim();
+    if (!cleanUrl || !cleanKey) {
+      alert('Hubungkan URL dan Anon Key Supabase terlebih dahulu.');
+      return;
+    }
+    if (!localStoreData) {
+      alert('Data toko lokal belum siap.');
+      return;
+    }
+
+    setIsUploadingAll(true);
+    setUploadFeedback(null);
+    try {
+      const client = getSupabaseClient(cleanUrl, cleanKey);
+      if (!client) throw new Error('Client Supabase tidak valid');
+      const res = await uploadAllLocalDataToSupabase(client, localStoreData);
+      if (res.success) {
+        setUploadFeedback(res.message);
+      } else {
+        setUploadFeedback('Gagal mengunggah data: ' + res.message);
+      }
+    } catch (err) {
+      setUploadFeedback('Error: ' + (err instanceof Error ? err.message : 'Gagal upload'));
+    } finally {
+      setIsUploadingAll(false);
+    }
   };
 
   const handleManualSyncNow = async () => {
@@ -188,12 +279,74 @@ export function MultiDeviceModal({
         </div>
 
         <form onSubmit={handleSaveAll} className="flex-1 overflow-y-auto pr-1 mt-4 space-y-5">
-          {/* Section 1: Device Preset Selector */}
+          {/* Section 0: Quick Paste Pairing Box for PC 1, 2, 3 */}
+          <div className="rounded-xl border border-amber-500/30 bg-gradient-to-r from-amber-950/30 to-slate-900 p-4 space-y-2.5">
+            <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+              <KeyRound className="h-4 w-4 text-amber-400" />
+              Sambungkan Cepat: Tempel Tautan atau Kode Pairing dari HP
+            </div>
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              Jika Anda sedang di Komputer 1, 2, atau 3: Cukup tempel link atau kode pairing yang dikirim dari HP di bawah ini lalu klik <b>Sambungkan</b>.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                placeholder="Tempel link https://... atau kode pairing di sini..."
+                value={pastedCodeOrLink}
+                onChange={(e) => setPastedCodeOrLink(e.target.value)}
+                className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-amber-400 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleApplyPastedCode}
+                className="rounded-xl bg-amber-500 hover:bg-amber-400 px-4 py-2 text-xs font-bold text-slate-950 shrink-0 transition-colors"
+              >
+                Sambungkan
+              </button>
+            </div>
+            {pastingError && (
+              <div className="text-xs text-rose-400 font-medium">{pastingError}</div>
+            )}
+          </div>
+
+          {/* Section 1: Upload Local Store Data (Push from Android) */}
+          {localStoreData && (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                    <UploadCloud className="h-4 w-4 text-emerald-400" />
+                    Kirim Seluruh Data HP Ini ke Cloud Sekarang
+                  </div>
+                  <div className="text-[11px] text-slate-300 mt-0.5">
+                    Pastikan logo, alamat, {localStoreData.products.length} produk, dan {localStoreData.users.length} akun kasir dari HP ini terunggah ke Cloud agar Komputer 1, 2, 3 bisa membaca semuanya.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleUploadAllToCloud}
+                  disabled={isUploadingAll || !url || !anonKey}
+                  className="rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 px-4 py-2 text-xs font-bold text-slate-950 shadow-md inline-flex items-center gap-1.5 shrink-0 transition-all active:scale-95"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isUploadingAll ? 'animate-spin' : ''}`} />
+                  {isUploadingAll ? 'Mengunggah...' : 'Upload Data ke Cloud'}
+                </button>
+              </div>
+
+              {uploadFeedback && (
+                <div className="p-2.5 rounded-lg border border-emerald-500/40 bg-emerald-950/40 text-emerald-200 text-xs font-medium animate-fade-in">
+                  {uploadFeedback}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Section 2: Device Preset Selector */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-bold text-white flex items-center gap-1.5">
                 <Layers className="h-4 w-4 text-amber-400" />
-                1. Pilih Peran Perangkat Ini Saat Ini:
+                Peran Perangkat Ini Saat Ini:
               </label>
               <span className="text-[11px] text-amber-400 font-mono">
                 Aktif: {currentDevice.name}
@@ -262,16 +415,16 @@ export function MultiDeviceModal({
             </div>
           </div>
 
-          {/* Section 2: Shared Supabase Database Connection */}
+          {/* Section 3: Supabase Credentials */}
           <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
               <div>
                 <div className="text-xs font-bold text-white flex items-center gap-1.5">
                   <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                  2. Kredensial Database Cloud Supabase (Satu Database untuk Semua Device)
+                  Kredensial Database Cloud Supabase
                 </div>
                 <div className="text-[11px] text-slate-400 mt-0.5">
-                  Hubungkan database agar akun kasir, logo, alamat, produk &amp; stok tersinkron otomatis.
+                  Satu database untuk semua PC dan HP di toko Anda.
                 </div>
               </div>
               <button
@@ -314,7 +467,7 @@ export function MultiDeviceModal({
               </div>
             </div>
 
-            {/* Diagnostics & Quick Actions */}
+            {/* Quick Actions / Share */}
             <div className="flex flex-wrap items-center gap-2 pt-2">
               <button
                 type="button"
@@ -333,7 +486,17 @@ export function MultiDeviceModal({
                 className="rounded-lg border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-300 inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors"
               >
                 {copiedLink ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}
-                {copiedLink ? 'Tautan Tersalin!' : 'Salin Tautan Cepat untuk PC 1, 2, 3'}
+                {copiedLink ? 'Tautan Tersalin!' : 'Salin Tautan Cepat PC'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyPairingCode}
+                disabled={!url || !anonKey}
+                className="rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors"
+              >
+                {copiedCode ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedCode ? 'Kode Tersalin!' : 'Salin Kode Pairing'}
               </button>
 
               {onTriggerSync && (
@@ -343,8 +506,8 @@ export function MultiDeviceModal({
                   disabled={isSyncingNow || !url || !anonKey}
                   className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-300 inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors"
                 >
-                  <RefreshCw className={`h-3.5 w-3.5 ${isSyncingNow ? 'animate-spin' : ''}`} />
-                  {isSyncingNow ? 'Menyinkronkan...' : 'Tarik & Sinkronkan Sekarang'}
+                  <DownloadCloud className={`h-3.5 w-3.5 ${isSyncingNow ? 'animate-spin' : ''}`} />
+                  {isSyncingNow ? 'Menyinkronkan...' : 'Unduh Data Cloud'}
                 </button>
               )}
             </div>
@@ -372,17 +535,6 @@ export function MultiDeviceModal({
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Section 3: Cara Kerja Tautan Cepat Multi-Device */}
-          <div className="rounded-xl border border-amber-500/20 bg-amber-950/15 p-4 space-y-2 text-xs">
-            <div className="font-bold text-amber-300 flex items-center gap-1.5">
-              <Share2 className="h-4 w-4 text-amber-400" />
-              💡 Solusi Mudah Menghubungkan Komputer 1, 2, dan 3:
-            </div>
-            <p className="text-slate-300 text-[11.5px] leading-relaxed">
-              Anda <b>tidak perlu mengetik URL dan Anon Key panjang</b> di setiap komputer. Cukup klik tombol <b>&quot;Salin Tautan Cepat untuk PC 1, 2, 3&quot;</b> di atas, lalu kirim via WhatsApp Web / email ke Komputer 1, 2, dan 3. Saat link dibuka di browser komputer, seluruh database, logo, alamat, dan akun kasir otomatis tersambung dalam 1 detik!
-            </p>
           </div>
 
           {saveSuccessMsg && (

@@ -597,35 +597,171 @@ export async function testSupabaseConnection(
 }
 
 // ----------------------------------------------------------------------------
-// QUICK PAIRING HELPER (1-Click Connect Link)
+// BATCH PRODUCTS PUSH
 // ----------------------------------------------------------------------------
-export function generateQuickConnectLink(url: string, anonKey: string): string {
+export async function batchPushProductsToSupabase(client: SupabaseClient, products: Product[]): Promise<number> {
+  let count = 0;
+  try {
+    const payload = products.map((p) => ({
+      id: p.id,
+      name: p.name,
+      sku: p.sku,
+      barcode: p.barcode,
+      category: p.category || 'Umum',
+      supplier_id: p.supplierId || null,
+      stock: p.stock ?? 0,
+      min_stock: p.minStock ?? 5,
+      buy: p.buy ?? 0,
+      retail: p.retail ?? 0,
+      grosir: p.grosir ?? 0,
+      grosir_min: p.grosirMin ?? 6,
+      updated_at: new Date().toISOString()
+    }));
+    const { error } = await client.from('products').upsert(payload, { onConflict: 'id' });
+    if (!error) {
+      count = products.length;
+    } else {
+      console.warn('Batch push products error, trying one by one:', error.message);
+      for (const p of products) {
+        const ok = await pushProductToSupabase(client, p);
+        if (ok) count++;
+      }
+    }
+  } catch (err) {
+    console.warn('batchPushProductsToSupabase error:', err);
+  }
+  return count;
+}
+
+// ----------------------------------------------------------------------------
+// UPLOAD ALL LOCAL DATA (HP -> SUPABASE CLOUD)
+// ----------------------------------------------------------------------------
+export async function uploadAllLocalDataToSupabase(
+  client: SupabaseClient,
+  data: {
+    branding: Branding;
+    printerConfig: PrinterConfig;
+    users: User[];
+    products: Product[];
+    suppliers: Supplier[];
+  }
+): Promise<{
+  success: boolean;
+  storeSettingsOk: boolean;
+  usersUploaded: number;
+  productsUploaded: number;
+  suppliersUploaded: number;
+  message: string;
+}> {
+  const result = {
+    success: false,
+    storeSettingsOk: false,
+    usersUploaded: 0,
+    productsUploaded: 0,
+    suppliersUploaded: 0,
+    message: ''
+  };
+
+  try {
+    // 1. Store settings
+    result.storeSettingsOk = await pushStoreSettingsToSupabase(client, data.branding, data.printerConfig);
+
+    // 2. Users (Admin + Kasir)
+    for (const u of data.users) {
+      const ok = await pushUserToSupabase(client, u);
+      if (ok) result.usersUploaded++;
+    }
+
+    // 3. Products
+    result.productsUploaded = await batchPushProductsToSupabase(client, data.products);
+
+    // 4. Suppliers
+    for (const s of data.suppliers) {
+      const ok = await pushSupplierToSupabase(client, s);
+      if (ok) result.suppliersUploaded++;
+    }
+
+    result.success = result.storeSettingsOk || result.productsUploaded > 0 || result.usersUploaded > 0;
+    result.message = `Berhasil mengunggah ${result.productsUploaded} produk, ${result.usersUploaded} akun pengguna, dan identitas toko ke Cloud!`;
+  } catch (err) {
+    result.message = err instanceof Error ? err.message : 'Gagal mengunggah data ke Cloud';
+  }
+
+  return result;
+}
+
+// ----------------------------------------------------------------------------
+// QUICK PAIRING & CODE HELPERS (1-Click Connect Link & Code)
+// ----------------------------------------------------------------------------
+export function generatePairingCode(url: string, anonKey: string): string {
   try {
     const payload = JSON.stringify({ u: url.trim(), k: anonKey.trim() });
-    const b64 = btoa(payload);
-    const origin = window.location.origin + window.location.pathname;
-    return `${origin}#connect=${encodeURIComponent(b64)}`;
+    return btoa(payload);
   } catch {
     return '';
   }
 }
 
-export function parseQuickConnectHash(): { url: string; anonKey: string } | null {
+export function generateQuickConnectLink(url: string, anonKey: string): string {
   try {
-    const hash = window.location.hash;
-    if (hash.includes('connect=')) {
-      const parts = hash.split('connect=');
-      if (parts[1]) {
-        const decoded = decodeURIComponent(parts[1]);
-        const jsonStr = atob(decoded);
+    const code = generatePairingCode(url, anonKey);
+    const origin = window.location.origin + window.location.pathname;
+    return `${origin}?connect=${encodeURIComponent(code)}`;
+  } catch {
+    return '';
+  }
+}
+
+export function parseQuickConnectString(input?: string): { url: string; anonKey: string } | null {
+  try {
+    const target = input ? input.trim() : (window.location.search + window.location.hash);
+    if (!target) return null;
+
+    // 1. Check if input is a JSON string
+    if (target.startsWith('{') && target.endsWith('}')) {
+      const obj = JSON.parse(target);
+      if (obj.u && obj.k) return { url: obj.u, anonKey: obj.k };
+      if (obj.url && obj.anonKey) return { url: obj.url, anonKey: obj.anonKey };
+    }
+
+    // 2. Check if string has connect= query or hash
+    if (target.includes('connect=')) {
+      const match = target.match(/connect=([^&#\s]+)/);
+      if (match && match[1]) {
+        const rawCode = decodeURIComponent(match[1]);
+        const jsonStr = atob(rawCode);
         const obj = JSON.parse(jsonStr);
-        if (obj.u && obj.k) {
-          return { url: obj.u, anonKey: obj.k };
-        }
+        if (obj.u && obj.k) return { url: obj.u, anonKey: obj.k };
+      }
+    }
+
+    // 3. Check if string has sb_url & sb_key
+    if (target.includes('sb_url=') && target.includes('sb_key=')) {
+      const urlMatch = target.match(/sb_url=([^&#\s]+)/);
+      const keyMatch = target.match(/sb_key=([^&#\s]+)/);
+      if (urlMatch && keyMatch) {
+        return {
+          url: decodeURIComponent(urlMatch[1]),
+          anonKey: decodeURIComponent(keyMatch[1])
+        };
+      }
+    }
+
+    // 4. Check if string is raw Base64 code
+    if (/^[A-Za-z0-9+/=]+$/.test(target) && target.length > 20) {
+      try {
+        const jsonStr = atob(target);
+        const obj = JSON.parse(jsonStr);
+        if (obj.u && obj.k) return { url: obj.u, anonKey: obj.k };
+      } catch {
+        // Not a base64 json
       }
     }
   } catch (err) {
-    console.warn('Gagal membaca QuickConnect hash:', err);
+    console.warn('parseQuickConnectString error:', err);
   }
   return null;
 }
+
+// Deprecated alias for backwards compatibility
+export const parseQuickConnectHash = parseQuickConnectString;

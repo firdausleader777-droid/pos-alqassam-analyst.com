@@ -27,6 +27,7 @@ import {
   pushTransactionToSupabase,
   pushStockDeductionsToSupabase,
   pushProductToSupabase,
+  batchPushProductsToSupabase,
   fetchRemoteProducts,
   fetchRemoteTransactions,
   fetchRemoteStoreSettings,
@@ -36,6 +37,7 @@ import {
   deleteUserFromSupabase,
   fetchRemoteSuppliers,
   pushSupplierToSupabase,
+  parseQuickConnectString,
   parseQuickConnectHash
 } from './utils/supabaseSync';
 
@@ -181,6 +183,8 @@ export default function App() {
   const [currentReceipt, setCurrentReceipt] = useState<Transaction | null>(null);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginQuickPaste, setLoginQuickPaste] = useState('');
+  const [loginQuickPasteMsg, setLoginQuickPasteMsg] = useState('');
 
   // Listen to Online/Offline
   useEffect(() => {
@@ -194,25 +198,36 @@ export default function App() {
     };
   }, []);
 
-  // Quick Connect Hash Listener (e.g. #connect=... opened on PC 1, 2, 3)
+  // Quick Connect Listener (handles ?connect=..., #connect=..., popstate, and hashchange)
   useEffect(() => {
-    const quick = parseQuickConnectHash();
-    if (quick) {
-      const updatedCfg: SupabaseConfig = {
-        url: quick.url,
-        anonKey: quick.anonKey,
-        connected: true
-      };
-      setSupabaseConfig(updatedCfg);
-      DB.set('supabaseConfig', updatedCfg);
-      // Clean hash from URL bar
-      window.history.replaceState(null, '', window.location.pathname);
-      setRealtimeNotification('✅ Berhasil terhubung ke database cloud toko via Tautan Cepat!');
-      setTimeout(() => setRealtimeNotification(null), 4000);
-    }
+    const handleCheckQuickConnect = () => {
+      const quick = parseQuickConnectString();
+      if (quick && quick.url && quick.anonKey) {
+        const updatedCfg: SupabaseConfig = {
+          url: quick.url,
+          anonKey: quick.anonKey,
+          connected: true
+        };
+        setSupabaseConfig(updatedCfg);
+        DB.set('supabaseConfig', updatedCfg);
+        // Clean URL cleanly without reload
+        const cleanPath = window.location.pathname;
+        window.history.replaceState(null, '', cleanPath);
+        setRealtimeNotification('✅ Berhasil terhubung ke database cloud toko!');
+        setTimeout(() => setRealtimeNotification(null), 4000);
+      }
+    };
+
+    handleCheckQuickConnect();
+    window.addEventListener('hashchange', handleCheckQuickConnect);
+    window.addEventListener('popstate', handleCheckQuickConnect);
+    return () => {
+      window.removeEventListener('hashchange', handleCheckQuickConnect);
+      window.removeEventListener('popstate', handleCheckQuickConnect);
+    };
   }, []);
 
-  // Full Cloud Sync function (runs on boot, on config save, or manual trigger)
+  // Full Cloud Sync function with Bidirectional Auto-Seeding
   const syncAllDataFromCloud = async (client: any) => {
     try {
       setCloudSyncStatus('connecting');
@@ -220,7 +235,11 @@ export default function App() {
 
       // 1. Store Settings (Logo, Alamat, Format Struk)
       const remoteSettings = await fetchRemoteStoreSettings(client);
-      if (remoteSettings) {
+      const currentBranding = DB.get<Branding>('branding', branding);
+      const currentPrinter = DB.get<PrinterConfig>('printerConfig', printerConfig);
+
+      if (remoteSettings && (remoteSettings.branding.appLogo || remoteSettings.branding.storeLogo || remoteSettings.printerConfig.address || remoteSettings.branding.storeName !== 'POS Al-Qassam Analyst')) {
+        // Remote has real custom store settings -> adopt them!
         setBranding((prev) => {
           const merged = { ...prev, ...remoteSettings.branding };
           DB.set('branding', merged);
@@ -233,48 +252,70 @@ export default function App() {
             return merged;
           });
         }
+      } else if (currentBranding.appLogo || currentBranding.storeLogo || currentPrinter.address || currentBranding.storeName !== 'POS Al-Qassam Analyst') {
+        // Remote is empty or default, but this local device HAS custom logo or address -> PUSH TO CLOUD!
+        await pushStoreSettingsToSupabase(client, currentBranding, currentPrinter);
       }
 
       // 2. Users (Akun Kasir, Password, Izin Akses)
       const remoteUsers = await fetchRemoteUsers(client);
+      const currentLocalUsers = DB.get<User[]>('users', users);
       if (remoteUsers && remoteUsers.length > 0) {
-        setUsers((prev) => {
-          const mergedMap = new Map<string, User>();
-          prev.forEach((u) => mergedMap.set(u.username.toLowerCase(), u));
-          remoteUsers.forEach((u) => mergedMap.set(u.username.toLowerCase(), u));
-          const list = Array.from(mergedMap.values());
-          DB.set('users', list);
-          return list;
-        });
+        const mergedMap = new Map<string, User>();
+        currentLocalUsers.forEach((u) => mergedMap.set(u.username.toLowerCase(), u));
+        remoteUsers.forEach((u) => mergedMap.set(u.username.toLowerCase(), u));
+        const list = Array.from(mergedMap.values());
+        setUsers(list);
+        DB.set('users', list);
+
+        // Push any local user not yet in remote
+        for (const localU of currentLocalUsers) {
+          if (!remoteUsers.some((ru) => ru.username.toLowerCase() === localU.username.toLowerCase())) {
+            await pushUserToSupabase(client, localU);
+          }
+        }
+      } else if (currentLocalUsers.length > 0) {
+        // Remote has 0 users, push all local users
+        for (const localU of currentLocalUsers) {
+          await pushUserToSupabase(client, localU);
+        }
       }
 
       // 3. Products (Stok, Harga, Kategori)
       const remoteProds = await fetchRemoteProducts(client);
+      const currentLocalProds = DB.get<Product[]>('products', products);
       if (remoteProds && remoteProds.length > 0) {
         setProducts(remoteProds);
         DB.set('products', remoteProds);
+      } else if (currentLocalProds.length > 0) {
+        // Remote has 0 products, push all local products to Supabase
+        await batchPushProductsToSupabase(client, currentLocalProds);
       }
 
       // 4. Transactions (Riwayat Penjualan Multi-Device)
       const remoteTrxs = await fetchRemoteTransactions(client);
+      const currentLocalTrxs = DB.get<Transaction[]>('transactions', transactions);
       if (remoteTrxs && remoteTrxs.length > 0) {
-        setTransactions((prev) => {
-          const mergedMap = new Map<string, Transaction>();
-          prev.forEach((t) => mergedMap.set(t.id, t));
-          remoteTrxs.forEach((t) => mergedMap.set(t.id, t));
-          const list = Array.from(mergedMap.values()).sort(
-            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-          );
-          DB.set('transactions', list);
-          return list;
-        });
+        const mergedMap = new Map<string, Transaction>();
+        currentLocalTrxs.forEach((t) => mergedMap.set(t.id, t));
+        remoteTrxs.forEach((t) => mergedMap.set(t.id, t));
+        const list = Array.from(mergedMap.values()).sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+        setTransactions(list);
+        DB.set('transactions', list);
       }
 
       // 5. Suppliers
       const remoteSuppliers = await fetchRemoteSuppliers(client);
+      const currentLocalSuppliers = DB.get<Supplier[]>('suppliers', suppliers);
       if (remoteSuppliers && remoteSuppliers.length > 0) {
         setSuppliers(remoteSuppliers);
         DB.set('suppliers', remoteSuppliers);
+      } else if (currentLocalSuppliers.length > 0) {
+        for (const s of currentLocalSuppliers) {
+          await pushSupplierToSupabase(client, s);
+        }
       }
 
       setCloudSyncStatus('connected');
@@ -705,21 +746,71 @@ export default function App() {
             </p>
           </div>
 
-          {/* Cloud Connection Quick Badge on Login */}
-          <div className="mb-4 flex items-center justify-between p-2.5 rounded-xl border border-slate-800 bg-slate-950/70 text-xs">
-            <div className="flex items-center gap-2">
-              <span className={`h-2.5 w-2.5 rounded-full ${supabaseConfig.connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-              <span className="text-slate-300 font-medium text-[11px]">
-                {supabaseConfig.connected ? 'Cloud Terhubung' : 'Database: Mode Lokal'}
-              </span>
+          {/* Cloud Connection Quick Badge & Fast Paste on Login */}
+          <div className="mb-4 rounded-xl border border-slate-800 bg-slate-950/70 p-2.5 text-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={`h-2.5 w-2.5 rounded-full ${supabaseConfig.connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                <span className="text-slate-300 font-medium text-[11px]">
+                  {supabaseConfig.connected ? 'Cloud Terhubung (Database Toko Aktif)' : 'Cloud: Mode Lokal Offline'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDeviceModalOpen(true)}
+                className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2"
+              >
+                {supabaseConfig.connected ? 'Atur Device' : 'Pengaturan'}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsDeviceModalOpen(true)}
-              className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline underline-offset-2"
-            >
-              {supabaseConfig.connected ? 'Atur Device' : 'Hubungkan Cloud'}
-            </button>
+
+            {!supabaseConfig.connected && (
+              <div className="pt-1.5 border-t border-slate-800/80">
+                <div className="text-[10.5px] text-slate-400 mb-1">
+                  Punya tautan atau kode pairing dari HP?
+                </div>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="Tempel link / kode pairing..."
+                    value={loginQuickPaste}
+                    onChange={(e) => setLoginQuickPaste(e.target.value)}
+                    className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] text-white placeholder-slate-500 focus:border-amber-400 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const parsed = parseQuickConnectString(loginQuickPaste);
+                      if (parsed && parsed.url && parsed.anonKey) {
+                        const updatedCfg: SupabaseConfig = {
+                          url: parsed.url,
+                          anonKey: parsed.anonKey,
+                          connected: true
+                        };
+                        setSupabaseConfig(updatedCfg);
+                        DB.set('supabaseConfig', updatedCfg);
+                        setLoginQuickPaste('');
+                        setLoginQuickPasteMsg('✅ Terhubung! Mengunduh data toko...');
+                        const client = getSupabaseClient(parsed.url, parsed.anonKey);
+                        if (client) syncAllDataFromCloud(client);
+                        setTimeout(() => setLoginQuickPasteMsg(''), 4000);
+                      } else {
+                        setLoginQuickPasteMsg('❌ Kode atau tautan tidak valid.');
+                        setTimeout(() => setLoginQuickPasteMsg(''), 3000);
+                      }
+                    }}
+                    className="rounded-lg bg-amber-500 hover:bg-amber-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 transition-colors"
+                  >
+                    Sambungkan
+                  </button>
+                </div>
+                {loginQuickPasteMsg && (
+                  <div className="text-[10.5px] mt-1 font-semibold text-amber-300 animate-fade-in">
+                    {loginQuickPasteMsg}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
@@ -796,6 +887,7 @@ export default function App() {
             const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
             if (client) await syncAllDataFromCloud(client);
           }}
+          localStoreData={{ branding, printerConfig, users, products, suppliers }}
         />
       </div>
     );
@@ -1323,6 +1415,7 @@ export default function App() {
           const client = getSupabaseClient(supabaseConfig.url, supabaseConfig.anonKey);
           if (client) await syncAllDataFromCloud(client);
         }}
+        localStoreData={{ branding, printerConfig, users, products, suppliers }}
       />
 
       {/* -------------------------------------------------------------
